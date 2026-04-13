@@ -2,14 +2,14 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>BUNDY-METER - EasyMetrics</title>
+    <title>BUNDY-MESUREUR</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/paper.js/0.12.15/paper-full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <style>
         body { font-family: sans-serif; background: #1f2937; color: white; margin: 0; display: flex; flex-direction: column; height: 100vh; }
         
-        /* NOUVELLE COULEUR DE FOND POUR VERIFIER LA MISE A JOUR (Vert Emeraude) */
-        #toolbar { background: #065f46; padding: 15px; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; border-bottom: 2px solid #047857; }
+        /* COULEUR ROUGE CARMIN POUR VERIFIER LA MISE A JOUR */
+        #toolbar { background: #7f1d1d; padding: 15px; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; border-bottom: 2px solid #450a0a; }
         
         canvas { flex-grow: 1; background: #f8fafc; cursor: grab; }
         .controls { display: flex; align-items: center; gap: 5px; }
@@ -20,8 +20,8 @@
         .btn-svg { background: #8b5cf6; }
         .btn-svg:hover { background: #7c3aed; }
         input[type="number"], select { width: auto; padding: 5px; border-radius: 4px; border: none; }
-        label { font-size: 12px; color: #d1fae5; font-weight: bold;}
-        #title-brand { margin-left: auto; color: #fbbf24; font-weight: 900; font-size: 22px; letter-spacing: 1px; }
+        label { font-size: 12px; color: #fecaca; font-weight: bold;}
+        #title-brand { margin-left: auto; color: #fca5a5; font-weight: 900; font-size: 22px; letter-spacing: 1px; }
     </style>
 </head>
 <body>
@@ -32,7 +32,7 @@
     <div class="controls">
         <label>Affichage:</label>
         <select id="displayMode">
-            <option value="direct">Sur les arêtes (Adaptatif)</option>
+            <option value="direct">Sur les arêtes</option>
             <option value="legend">Légende (Tableau)</option>
         </select>
     </div>
@@ -54,7 +54,7 @@
     <button class="btn-export" onclick="exportPDF()">Export PDF</button>
     <button class="btn-svg" onclick="exportSVG()">Export Vectoriel</button> 
     
-    <div id="title-brand">BUNDY)METER</div>
+    <div id="title-brand">BUNDY-MESUREUR</div>
 </div>
 
 <canvas id="myCanvas" resize></canvas>
@@ -96,13 +96,14 @@
         
         let shapeCount = 1;
         const processedEdges = new Set(); 
-        const legendData = []; // Pour stocker les données du tableau
+        const legendData = []; 
 
         const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
         paths.forEach(path => {
             if (path.segments && path.segments.length > 2 && path.length > 1) {
                 
+                // 1. Calcul du centre
                 let cx = 0, cy = 0;
                 path.segments.forEach(seg => {
                     cx += seg.point.x;
@@ -112,19 +113,24 @@
                 cy /= path.segments.length;
                 const centroid = new paper.Point(cx, cy);
 
+                // Taille adaptative du NUMERO selon la boîte englobante de la forme
+                const minDimension = Math.min(path.bounds.width, path.bounds.height);
+                const dynIdSize = Math.max(3, Math.min(14, minDimension / 2.5)); // Ne dépasse jamais 14, mais rétrécit si besoin
+
                 const centerText = new paper.PointText({
                     point: centroid,
                     content: shapeCount.toString(),
                     fillColor: '#ef4444', 
                     fontWeight: 'bold',
-                    fontSize: 14,
+                    fontSize: dynIdSize,
                     justification: 'center'
                 });
+                // Centrage vertical parfait
                 centerText.position.y += centerText.bounds.height / 4;
                 metricsGroup.addChild(centerText);
 
                 let edgeIndex = 0;
-                let currentShapeLegend = []; // Mesures pour ce triangle
+                let currentShapeLegend = []; 
 
                 path.curves.forEach(curve => {
                     const p1 = curve.point1;
@@ -137,12 +143,17 @@
 
                     const rawLen = p1.getDistance(p2);
                     if (rawLen < 1) return; 
-                    const realLen = (rawLen * ratio / 10).toFixed(2); // 2 chiffres après la virgule
+                    const realLen = (rawLen * ratio / 10).toFixed(2); 
+
+                    // TAILLE ADAPTATIVE DE LA COTE (max 9px, min 1.5px selon la longueur de la ligne)
+                    const dynFontSize = Math.max(1.5, Math.min(9, rawLen / 3.5));
 
                     const vector = p2.subtract(p1);
                     let normal = vector.clone();
                     normal.angle += 90; 
-                    normal = normal.normalize(6); 
+                    
+                    // L'offset vers l'intérieur dépend de la taille de la police (évite l'écrasement au centre)
+                    normal = normal.normalize(dynFontSize * 0.7); 
                     
                     const toCentroid = centroid.subtract(midPoint);
                     if (normal.dot(toCentroid) < 0) {
@@ -151,18 +162,14 @@
 
                     const textPos = midPoint.add(normal);
 
-                    // LOGIQUE D'AFFICHAGE SELON LE MODE
                     let displayText = "";
-                    let dynFontSize = 9;
                     let fontColor = '#2563eb';
 
                     if (mode === "direct") {
                         displayText = realLen + unit;
-                        // Police adaptative : plus petit si la ligne est courte (min 4px, max 9px)
-                        dynFontSize = Math.max(5, Math.min(9, rawLen / 3)); 
                     } else {
                         displayText = alphabet[edgeIndex % 26];
-                        fontColor = '#d97706'; // Orange pour les lettres
+                        fontColor = '#d97706'; 
                         currentShapeLegend.push(`${displayText}: ${realLen}${unit}`);
                     }
 
@@ -178,6 +185,8 @@
                     let textAngle = vector.angle;
                     if (textAngle > 90 || textAngle < -90) textAngle += 180;
                     text.rotate(textAngle, textPos);
+                    
+                    // Ajustement vertical proportionnel
                     text.position.y += text.bounds.height / 4;
                     
                     metricsGroup.addChild(text);
@@ -192,7 +201,7 @@
             }
         });
 
-        // DESSIN DU TABLEAU DE LEGENDE (Si mode Légende)
+        // DESSIN DE LA LEGENDE
         if (mode === "legend" && legendData.length > 0) {
             let startX = svgLayer.bounds.right + 40;
             let startY = svgLayer.bounds.top;
@@ -221,8 +230,7 @@
                 metricsGroup.addChild(row);
                 
                 currentY += 16;
-                // Si la légende descend plus bas que le dessin, on crée une 2ème colonne
-                if (currentY > svgLayer.bounds.bottom && legendData.length > 15) {
+                if (currentY > Math.max(svgLayer.bounds.bottom, startY + 500)) {
                     currentY = startY;
                     currentX += 220; 
                 }
@@ -230,7 +238,6 @@
         }
     }
 
-    // EXPORT PDF (Capture l'écran)
     function exportPDF() {
         const { jsPDF } = window.jspdf;
         const canvas = document.getElementById('myCanvas');
@@ -241,10 +248,9 @@
         const height = pdf.internal.pageSize.getHeight();
         
         pdf.addImage(imgData, 'PNG', 0, 0, width, height);
-        pdf.save("BundyMeter_Plan.pdf");
+        pdf.save("BundyMesureur_Plan.pdf");
     }
 
-    // EXPORT VECTORIEL SVG (Génère le vrai fichier avec lignes et textes)
     function exportSVG() {
         const svgStr = paper.project.exportSVG({ asString: true });
         const blob = new Blob([svgStr], {type: "image/svg+xml;charset=utf-8"});
@@ -252,7 +258,7 @@
         
         const link = document.createElement("a");
         link.href = url;
-        link.download = "BundyMeter_Vector.svg";
+        link.download = "BundyMesureur_Vector.svg";
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
