@@ -44,6 +44,7 @@
 <script>
     paper.setup('myCanvas');
     let svgLayer;
+    let metricsGroup; // Groupe pour pouvoir effacer les anciens textes
 
     // 1. Chargement du fichier
     document.getElementById('fileInput').onchange = function(e) {
@@ -51,6 +52,8 @@
         const reader = new FileReader();
         reader.onload = function(event) {
             if (svgLayer) svgLayer.remove();
+            if (metricsGroup) metricsGroup.remove();
+            
             svgLayer = paper.project.importSVG(event.target.result, {
                 expandShapes: true,
                 insert: true
@@ -64,52 +67,102 @@
     function processSVG() {
         if (!svgLayer) return;
         
+        // Nettoyer les anciennes mesures si on reclique
+        if (metricsGroup) {
+            metricsGroup.remove();
+        }
+        metricsGroup = new paper.Group();
+        
         const ratio = parseFloat(document.getElementById('scaleRatio').value);
         const unit = document.getElementById('unitSelect').value;
-        const metricsColor = '#2563eb';
         
-        // On cherche tous les chemins (lignes/triangles)
+        // Trouver tous les tracés (lignes et formes)
         const paths = paper.project.getItems({ class: paper.Path });
         
         let shapeCount = 1;
+        const processedEdges = new Set(); // Pour éviter les textes en double sur les arêtes partagées
 
         paths.forEach(path => {
-            // A. NUMÉROTATION DES FORMES (AU CENTRE)
-            if (path.closed || path.segments.length > 2) {
+            // On ne traite que les formes géométriques (minimum 3 points pour un triangle)
+            if (path.segments && path.segments.length > 2 && path.length > 1) {
+                
+                // 1. Calculer le VRAI centre (Centroid) de la forme
+                let cx = 0, cy = 0;
+                path.segments.forEach(seg => {
+                    cx += seg.point.x;
+                    cy += seg.point.y;
+                });
+                cx /= path.segments.length;
+                cy /= path.segments.length;
+                const centroid = new paper.Point(cx, cy);
+
+                // 2. Ajouter le numéro de la pièce au centre
                 const centerText = new paper.PointText({
-                    point: path.bounds.center,
+                    point: centroid,
                     content: shapeCount.toString(),
-                    fillColor: '#1f2937',
+                    fillColor: '#ef4444', // Rouge pour bien distinguer le numéro
                     fontWeight: 'bold',
                     fontSize: 14,
                     justification: 'center'
                 });
+                // Centrage vertical approximatif
+                centerText.position.y += centerText.bounds.height / 4;
+                metricsGroup.addChild(centerText);
                 shapeCount++;
-            }
 
-            // B. MESURE DES SEGMENTS
-            path.curves.forEach(curve => {
-                const p1 = curve.point1;
-                const p2 = curve.point2;
-                const midPoint = p1.add(p2).divide(2);
-                
-                // Calcul longueur (Paper.js utilise les points, on applique le ratio)
-                const rawLen = p1.getDistance(p2);
-                const realLen = (rawLen * ratio / 10).toFixed(1); // Simulation échelle
+                // 3. Mesurer chaque arête de cette forme
+                path.curves.forEach(curve => {
+                    const p1 = curve.point1;
+                    const p2 = curve.point2;
+                    const midPoint = p1.add(p2).divide(2);
+                    
+                    // Anti-Superposition : Si une ligne est partagée entre deux triangles, on l'arrondit pour la reconnaître
+                    const edgeKey = `${midPoint.x.toFixed(1)},${midPoint.y.toFixed(1)}`;
+                    if (processedEdges.has(edgeKey)) return; 
+                    processedEdges.add(edgeKey);
 
-                // Affichage du texte sur la ligne
-                const text = new paper.PointText({
-                    point: midPoint.add(new paper.Point(0, -5)),
-                    content: realLen + unit,
-                    fillColor: metricsColor,
-                    fontSize: 10,
-                    justification: 'center'
+                    // Calcul de la longueur
+                    const rawLen = p1.getDistance(p2);
+                    if (rawLen < 1) return; // Ignorer les micro-lignes invisibles
+                    const realLen = (rawLen * ratio / 10).toFixed(1);
+
+                    // 4. Calcul de l'orientation pour écrire "à l'intérieur" de la forme
+                    const vector = p2.subtract(p1);
+                    let normal = vector.clone();
+                    normal.angle += 90; // Vecteur perpendiculaire à la ligne
+                    normal = normal.normalize(7); // Décaler le texte de 7 pixels
+                    
+                    // Vérifier si la normale pointe vers l'extérieur ou l'intérieur
+                    const toCentroid = centroid.subtract(midPoint);
+                    if (normal.dot(toCentroid) < 0) {
+                        normal = normal.multiply(-1); // Inverser pour pointer vers l'intérieur
+                    }
+
+                    const textPos = midPoint.add(normal);
+
+                    // Création du texte de la mesure
+                    const text = new paper.PointText({
+                        point: textPos,
+                        content: realLen + unit,
+                        fillColor: '#2563eb', // Bleu
+                        fontSize: 9,
+                        justification: 'center'
+                    });
+                    
+                    // Inclinaison pour suivre la ligne
+                    let textAngle = vector.angle;
+                    // Retourner le texte s'il est à l'envers
+                    if (textAngle > 90 || textAngle < -90) {
+                        textAngle += 180;
+                    }
+                    text.rotate(textAngle, textPos);
+                    
+                    // Ajustement vertical pour qu'il ne coupe pas la ligne
+                    text.position.y += text.bounds.height / 4;
+                    
+                    metricsGroup.addChild(text);
                 });
-                
-                // Incliner le texte selon l'angle de la ligne
-                const vector = p2.subtract(p1);
-                text.rotate(vector.angle, midPoint);
-            });
+            }
         });
         
         document.getElementById('status').innerText = "Calcul terminé !";
@@ -118,7 +171,7 @@
     function exportPDF() {
         const { jsPDF } = window.jspdf;
         const canvas = document.getElementById('myCanvas');
-        const imgData = canvas.toDataURL('image/png');
+        const imgData = canvas.toDataURL('image/png', 1.0);
         
         const pdf = new jsPDF('l', 'mm', 'a4');
         const width = pdf.internal.pageSize.getWidth();
