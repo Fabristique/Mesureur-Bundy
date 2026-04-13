@@ -2,18 +2,26 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>SVG EasyMetrics - Bundy Low Poly</title>
+    <title>BUNDY)METER - EasyMetrics</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/paper.js/0.12.15/paper-full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <style>
         body { font-family: sans-serif; background: #1f2937; color: white; margin: 0; display: flex; flex-direction: column; height: 100vh; }
-        #toolbar { background: #111827; padding: 15px; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; border-bottom: 2px solid #374151; }
+        
+        /* NOUVELLE COULEUR DE FOND POUR VERIFIER LA MISE A JOUR (Vert Emeraude) */
+        #toolbar { background: #065f46; padding: 15px; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; border-bottom: 2px solid #047857; }
+        
         canvas { flex-grow: 1; background: #f8fafc; cursor: grab; }
         .controls { display: flex; align-items: center; gap: 5px; }
         button { background: #2563eb; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: bold; }
         button:hover { background: #1e40af; }
-        input[type="number"] { width: 60px; padding: 5px; border-radius: 4px; border: none; }
-        label { font-size: 12px; color: #9ca3af; }
+        .btn-export { background: #0ea5e9; }
+        .btn-export:hover { background: #0284c7; }
+        .btn-svg { background: #8b5cf6; }
+        .btn-svg:hover { background: #7c3aed; }
+        input[type="number"], select { width: auto; padding: 5px; border-radius: 4px; border: none; }
+        label { font-size: 12px; color: #d1fae5; font-weight: bold;}
+        #title-brand { margin-left: auto; color: #fbbf24; font-weight: 900; font-size: 22px; letter-spacing: 1px; }
     </style>
 </head>
 <body>
@@ -22,8 +30,16 @@
     <input type="file" id="fileInput" accept=".svg">
     
     <div class="controls">
+        <label>Affichage:</label>
+        <select id="displayMode">
+            <option value="direct">Sur les arêtes (Adaptatif)</option>
+            <option value="legend">Légende (Tableau)</option>
+        </select>
+    </div>
+
+    <div class="controls">
         <label>Ratio:</label>
-        <input type="number" id="scaleRatio" value="1" step="0.1">
+        <input type="number" id="scaleRatio" value="1" step="0.01">
     </div>
 
     <div class="controls">
@@ -35,8 +51,10 @@
     </div>
 
     <button onclick="processSVG()">Calculer Metrics</button>
-    <button onclick="exportPDF()" style="background: #0ea5e9;">Exporter PDF</button>
-    <span id="status" style="font-size: 12px; color: #fbbf24;"></span>
+    <button class="btn-export" onclick="exportPDF()">Export PDF</button>
+    <button class="btn-svg" onclick="exportSVG()">Export Vectoriel</button> 
+    
+    <div id="title-brand">BUNDY)METER</div>
 </div>
 
 <canvas id="myCanvas" resize></canvas>
@@ -44,9 +62,8 @@
 <script>
     paper.setup('myCanvas');
     let svgLayer;
-    let metricsGroup; // Groupe pour pouvoir effacer les anciens textes
+    let metricsGroup; 
 
-    // 1. Chargement du fichier
     document.getElementById('fileInput').onchange = function(e) {
         const file = e.target.files[0];
         const reader = new FileReader();
@@ -59,7 +76,6 @@
                 insert: true
             });
             svgLayer.position = paper.view.center;
-            document.getElementById('status').innerText = "SVG Importé. Cliquez sur 'Calculer'.";
         };
         reader.readAsText(file);
     };
@@ -67,7 +83,6 @@
     function processSVG() {
         if (!svgLayer) return;
         
-        // Nettoyer les anciennes mesures si on reclique
         if (metricsGroup) {
             metricsGroup.remove();
         }
@@ -75,18 +90,19 @@
         
         const ratio = parseFloat(document.getElementById('scaleRatio').value);
         const unit = document.getElementById('unitSelect').value;
+        const mode = document.getElementById('displayMode').value;
         
-        // Trouver tous les tracés (lignes et formes)
         const paths = paper.project.getItems({ class: paper.Path });
         
         let shapeCount = 1;
-        const processedEdges = new Set(); // Pour éviter les textes en double sur les arêtes partagées
+        const processedEdges = new Set(); 
+        const legendData = []; // Pour stocker les données du tableau
+
+        const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
         paths.forEach(path => {
-            // On ne traite que les formes géométriques (minimum 3 points pour un triangle)
             if (path.segments && path.segments.length > 2 && path.length > 1) {
                 
-                // 1. Calculer le VRAI centre (Centroid) de la forme
                 let cx = 0, cy = 0;
                 path.segments.forEach(seg => {
                     cx += seg.point.x;
@@ -96,78 +112,125 @@
                 cy /= path.segments.length;
                 const centroid = new paper.Point(cx, cy);
 
-                // 2. Ajouter le numéro de la pièce au centre
                 const centerText = new paper.PointText({
                     point: centroid,
                     content: shapeCount.toString(),
-                    fillColor: '#ef4444', // Rouge pour bien distinguer le numéro
+                    fillColor: '#ef4444', 
                     fontWeight: 'bold',
                     fontSize: 14,
                     justification: 'center'
                 });
-                // Centrage vertical approximatif
                 centerText.position.y += centerText.bounds.height / 4;
                 metricsGroup.addChild(centerText);
-                shapeCount++;
 
-                // 3. Mesurer chaque arête de cette forme
+                let edgeIndex = 0;
+                let currentShapeLegend = []; // Mesures pour ce triangle
+
                 path.curves.forEach(curve => {
                     const p1 = curve.point1;
                     const p2 = curve.point2;
                     const midPoint = p1.add(p2).divide(2);
                     
-                    // Anti-Superposition : Si une ligne est partagée entre deux triangles, on l'arrondit pour la reconnaître
                     const edgeKey = `${midPoint.x.toFixed(1)},${midPoint.y.toFixed(1)}`;
                     if (processedEdges.has(edgeKey)) return; 
                     processedEdges.add(edgeKey);
 
-                    // Calcul de la longueur
                     const rawLen = p1.getDistance(p2);
-                    if (rawLen < 1) return; // Ignorer les micro-lignes invisibles
-                    const realLen = (rawLen * ratio / 10).toFixed(1);
+                    if (rawLen < 1) return; 
+                    const realLen = (rawLen * ratio / 10).toFixed(2); // 2 chiffres après la virgule
 
-                    // 4. Calcul de l'orientation pour écrire "à l'intérieur" de la forme
                     const vector = p2.subtract(p1);
                     let normal = vector.clone();
-                    normal.angle += 90; // Vecteur perpendiculaire à la ligne
-                    normal = normal.normalize(7); // Décaler le texte de 7 pixels
+                    normal.angle += 90; 
+                    normal = normal.normalize(6); 
                     
-                    // Vérifier si la normale pointe vers l'extérieur ou l'intérieur
                     const toCentroid = centroid.subtract(midPoint);
                     if (normal.dot(toCentroid) < 0) {
-                        normal = normal.multiply(-1); // Inverser pour pointer vers l'intérieur
+                        normal = normal.multiply(-1); 
                     }
 
                     const textPos = midPoint.add(normal);
 
-                    // Création du texte de la mesure
+                    // LOGIQUE D'AFFICHAGE SELON LE MODE
+                    let displayText = "";
+                    let dynFontSize = 9;
+                    let fontColor = '#2563eb';
+
+                    if (mode === "direct") {
+                        displayText = realLen + unit;
+                        // Police adaptative : plus petit si la ligne est courte (min 4px, max 9px)
+                        dynFontSize = Math.max(5, Math.min(9, rawLen / 3)); 
+                    } else {
+                        displayText = alphabet[edgeIndex % 26];
+                        fontColor = '#d97706'; // Orange pour les lettres
+                        currentShapeLegend.push(`${displayText}: ${realLen}${unit}`);
+                    }
+
                     const text = new paper.PointText({
                         point: textPos,
-                        content: realLen + unit,
-                        fillColor: '#2563eb', // Bleu
-                        fontSize: 9,
+                        content: displayText,
+                        fillColor: fontColor,
+                        fontSize: dynFontSize,
+                        fontWeight: mode === "legend" ? 'bold' : 'normal',
                         justification: 'center'
                     });
                     
-                    // Inclinaison pour suivre la ligne
                     let textAngle = vector.angle;
-                    // Retourner le texte s'il est à l'envers
-                    if (textAngle > 90 || textAngle < -90) {
-                        textAngle += 180;
-                    }
+                    if (textAngle > 90 || textAngle < -90) textAngle += 180;
                     text.rotate(textAngle, textPos);
-                    
-                    // Ajustement vertical pour qu'il ne coupe pas la ligne
                     text.position.y += text.bounds.height / 4;
                     
                     metricsGroup.addChild(text);
+                    edgeIndex++;
                 });
+
+                if (mode === "legend") {
+                    legendData.push({ id: shapeCount, lines: currentShapeLegend });
+                }
+                
+                shapeCount++;
             }
         });
-        
-        document.getElementById('status').innerText = "Calcul terminé !";
+
+        // DESSIN DU TABLEAU DE LEGENDE (Si mode Légende)
+        if (mode === "legend" && legendData.length > 0) {
+            let startX = svgLayer.bounds.right + 40;
+            let startY = svgLayer.bounds.top;
+            
+            const title = new paper.PointText({
+                point: new paper.Point(startX, startY),
+                content: "TABLEAU DES MESURES",
+                fillColor: '#1f2937',
+                fontSize: 14,
+                fontWeight: 'bold'
+            });
+            metricsGroup.addChild(title);
+            startY += 25;
+
+            let currentY = startY;
+            let currentX = startX;
+
+            legendData.forEach(item => {
+                const rowText = `N°${item.id} -> ${item.lines.join(' | ')}`;
+                const row = new paper.PointText({
+                    point: new paper.Point(currentX, currentY),
+                    content: rowText,
+                    fillColor: '#374151',
+                    fontSize: 10
+                });
+                metricsGroup.addChild(row);
+                
+                currentY += 16;
+                // Si la légende descend plus bas que le dessin, on crée une 2ème colonne
+                if (currentY > svgLayer.bounds.bottom && legendData.length > 15) {
+                    currentY = startY;
+                    currentX += 220; 
+                }
+            });
+        }
     }
 
+    // EXPORT PDF (Capture l'écran)
     function exportPDF() {
         const { jsPDF } = window.jspdf;
         const canvas = document.getElementById('myCanvas');
@@ -178,7 +241,21 @@
         const height = pdf.internal.pageSize.getHeight();
         
         pdf.addImage(imgData, 'PNG', 0, 0, width, height);
-        pdf.save("Bundy_LowPoly_Metrics.pdf");
+        pdf.save("BundyMeter_Plan.pdf");
+    }
+
+    // EXPORT VECTORIEL SVG (Génère le vrai fichier avec lignes et textes)
+    function exportSVG() {
+        const svgStr = paper.project.exportSVG({ asString: true });
+        const blob = new Blob([svgStr], {type: "image/svg+xml;charset=utf-8"});
+        const url = URL.createObjectURL(blob);
+        
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "BundyMeter_Vector.svg";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     }
 </script>
 
